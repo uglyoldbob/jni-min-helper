@@ -1,6 +1,7 @@
 use crate::{
+    AndroidContextApi33,
     android::{AndroidContext, get_android_context, get_helper_class_loader},
-    jni_with_env,
+    android_api_level, jni_with_env,
     proxy::DynamicProxy,
 };
 
@@ -284,15 +285,46 @@ impl BroadcastReceiver {
         })
     }
 
+    // XXX: add the `exported` parameter in the next SemVer-breaking version.
     /// Registers the receiver to the current Android context.
+    /// `RECEIVER_EXPORTED` flag is set for Android 13 and above versions.
     pub fn register(&self, intent_filter: &IntentFilter<'_>) -> Result<(), Error> {
+        self.register_internal(intent_filter, true)
+    }
+
+    /// Registers the receiver to the current Android context.
+    /// `RECEIVER_NOT_EXPORTED` flag is set for Android 13 and above versions.
+    pub fn register_no_export(&self, intent_filter: &IntentFilter<'_>) -> Result<(), Error> {
+        self.register_internal(intent_filter, false)
+    }
+
+    fn register_internal(
+        &self,
+        intent_filter: &IntentFilter<'_>,
+        exported: bool,
+    ) -> Result<(), Error> {
         jni_with_env(|env| {
             let context = get_android_context();
-            context.register_receiver(env, &self.receiver, intent_filter)?;
+            if android_api_level() >= 33 {
+                let flag = if exported {
+                    AndroidContextApi33::RECEIVER_EXPORTED
+                } else {
+                    AndroidContextApi33::RECEIVER_NOT_EXPORTED
+                };
+                context.as_api_33(env).register_receiver(
+                    env,
+                    &self.receiver,
+                    intent_filter,
+                    flag,
+                )?;
+            } else {
+                context.register_receiver(env, &self.receiver, intent_filter)?;
+            }
             Ok(())
         })
     }
 
+    // XXX: add the `exported` parameter in the next SemVer-breaking version.
     /// Registers the receiver to the current Android context, with an intent filter
     /// that matches a single `action` with no data.
     pub fn register_for_action(&self, action: &str) -> Result<(), Error> {
@@ -300,6 +332,15 @@ impl BroadcastReceiver {
             let action = JString::new(env, action)?;
             let filter = IntentFilter::new_with_action(env, action)?;
             self.register(&filter)
+        })
+    }
+
+    /// The same as [Self::register_for_action], except using the `RECEIVER_NOT_EXPORTED` flag.
+    pub fn register_for_action_no_export(&self, action: &str) -> Result<(), Error> {
+        jni_with_env(|env| {
+            let action = JString::new(env, action)?;
+            let filter = IntentFilter::new_with_action(env, action)?;
+            self.register_no_export(&filter)
         })
     }
 

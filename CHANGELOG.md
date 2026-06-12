@@ -1,5 +1,8 @@
 # Changes
 
+## 0.4.2
+* Fixed the problem of `BroadcastReceiver` under Android 14 and above versions: "One of RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED should be specified when a receiver isn't being registered exclusively for system broadcasts".
+
 ## 0.4.1
 * Added `Intent::get_parcelable_extra` and `Intent::put_extra_parcelable`.
 * Removed custom `JCharSequence` binding in examples, because `jni` 0.22.4 added `JCharSequence` bindings.

@@ -1,7 +1,9 @@
-use crate::{
-    jni_with_env,
-    receiver::{AndroidBroadcastReceiver, Intent, IntentFilter},
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::OnceLock,
 };
+
 use jni::{
     Env, bind_java_type,
     errors::Error,
@@ -10,10 +12,9 @@ use jni::{
     refs::Global,
 };
 
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::OnceLock,
+use crate::{
+    jni_with_env,
+    receiver::{AndroidBroadcastReceiver, Intent, IntentFilter},
 };
 
 const DEX_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
@@ -54,6 +55,36 @@ bind_java_type! {
         fn unregister_receiver(receiver: AndroidBroadcastReceiver),
         fn check_self_permission(permission: JString) -> jint,
         fn start_activity(intent: Intent) -> (),
+    }
+}
+
+// TODO: remove this when <https://github.com/jni-rs/jni-rs/issues/764> is resolved.
+bind_java_type! {
+    pub(crate) AndroidContextApi33 => "android.content.Context",
+    type_map = {
+        AndroidBroadcastReceiver => "android.content.BroadcastReceiver",
+        Intent => "android.content.Intent",
+        IntentFilter => "android.content.IntentFilter",
+    },
+    methods {
+        // NOTE: this is actually added in API level 26.
+        fn register_receiver {
+            name = "registerReceiver",
+            sig = (receiver: AndroidBroadcastReceiver, filter: IntentFilter, flags: jint) -> Intent,
+        },
+    }
+}
+impl<'a> AndroidContextApi33<'a> {
+    pub const RECEIVER_EXPORTED: i32 = 0x00000002;
+    pub const RECEIVER_NOT_EXPORTED: i32 = 0x00000004;
+}
+impl<'local> AndroidContext<'local> {
+    pub fn as_api_33<'env: 'local>(
+        &self,
+        env: &jni::Env<'env>,
+    ) -> jni::objects::Cast<'_, '_, AndroidContextApi33<'local>> {
+        // Safety: `AndroidContext` and `AndroidContextApi33` both map to `android.content.Context`.
+        unsafe { env.as_cast_unchecked::<AndroidContextApi33>(self) }
     }
 }
 
