@@ -5,6 +5,8 @@
 //!
 //! This crate uses [ndk_context::AndroidContext] on Android, usually initialized
 //! by `android_activity`. Examples for Android are provided in the crate page.
+//! Please check out <https://cjycode.com/flutter_rust_bridge/guides/how-to/ndk-init>
+//! if you are not using `android_activity` as the native activity entrypoint.
 //!
 //! Please make sure you are viewing documentation generated for your target.
 
@@ -81,7 +83,10 @@ pub fn jni_get_vm() -> JavaVM {
         return vm;
     }
     let ctx = ndk_context::android_context();
-    assert!(!ctx.vm().is_null());
+    assert!(
+        !ctx.vm().is_null(),
+        "JVM pointer is uninitialized in `ndk_context` crate"
+    );
     // Safety: as documented in `ndk-context` to obtain the `jni::JavaVM`
     unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
 }

@@ -37,7 +37,7 @@ publish = false
 [dependencies]
 log = "0.4"
 jni = "0.22.4"
-jni-min-helper = "0.4.2"
+jni-min-helper = "0.4.3"
 android-activity = { version = "0.6.1", features = ["native-activity"] }
 android_logger = "0.15"
 
@@ -170,7 +170,7 @@ fn on_receive<'a>(
 <summary>Using the asynchronous broadcast waiter</summary>
 
 ```toml
-jni-min-helper = { version = "0.4.2", features = ["futures"] }
+jni-min-helper = { version = "0.4.3", features = ["futures"] }
 ```
 
 ```rust
@@ -462,7 +462,7 @@ publish = false
 
 [dependencies]
 log = "0.4"
-jni-min-helper = "0.4.2"
+jni-min-helper = "0.4.3"
 android-activity = { version = "0.6.1", features = ["native-activity"] }
 android_logger = "0.15"
 

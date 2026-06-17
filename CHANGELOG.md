@@ -1,5 +1,10 @@
 # Changes
 
+## 0.4.3
+* Added public methods `has_category`, `set_package`, `set_type`, `add_category` and `set_class_name` for `Intent` binding.
+* `Intent::set_class` is made private because it involves the `AndroidContext` binding type which is currently private. (Not a breaking change, because it could not be used outside)
+* Added description for `ndk_context`.
+
 ## 0.4.2
 * Fixed the problem of `BroadcastReceiver` under Android 14 and above versions: "One of RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED should be specified when a receiver isn't being registered exclusively for system broadcasts".
 
