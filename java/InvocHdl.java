@@ -9,7 +9,7 @@ public class InvocHdl implements InvocationHandler {
 
     // to be registered in native code
     private native Object rustHdl(long id, Method method, Object[] args) throws Throwable;
-    
+
     public InvocHdl(long id) {
         this.rust_hdl_id = id;
     }
@@ -23,16 +23,23 @@ public class InvocHdl implements InvocationHandler {
         String methodName = method.getName();
         if (methodName.equals("equals")) {
             if (args == null || args.length == 0) {
-                return false;
+                return Boolean.FALSE;
             }
-            if (args[0] == null || this.getClass() != args[0].getClass()) {
-                return false;
+            Object other = args[0];
+            if (other == proxy) return Boolean.TRUE;
+            if (other == null) return Boolean.FALSE;
+            if (Proxy.isProxyClass(other.getClass())) {
+                InvocationHandler otherH = Proxy.getInvocationHandler(other);
+                if (otherH instanceof InvocHdl) {
+                    return Boolean.valueOf(this.rust_hdl_id == ((InvocHdl) otherH).rust_hdl_id);
+                }
             }
-            InvocHdl other = (InvocHdl) args[0];
-            return Boolean.valueOf(this.getId() == other.getId());
+            return Boolean.FALSE;
         }
         if (methodName.equals("hashCode")) {
-            return Integer.valueOf(System.identityHashCode(this));
+            // mix high and low 32 bits of the long
+            int h = (int) (rust_hdl_id ^ (rust_hdl_id >>> 32));
+            return Integer.valueOf(h);
         }
         if (methodName.equals("toString")) {
             return "rust.jniminhelper.InvocHdl[" + this.rust_hdl_id + "]";

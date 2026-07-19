@@ -112,7 +112,7 @@ static RUST_HANDLERS: LazyLock<Mutex<HashMap<i64, Arc<RustHandler>>>> =
 // Requiring all references here to have the same lifetime bounds doesn't introduce
 // any inconvenience outside, because these closures are called only in `rust_callback()`.
 // It's tested that returning a new local reference to the Java caller doesn't leak.
-type RustHandler = dyn for<'a> Fn(&mut Env<'a>, JMethod<'a>, JObjectArray<JObject<'a>>) -> Result<JObject<'a>, Error>
+type RustHandler = dyn for<'a> Fn(&mut Env<'a>, JMethod<'a>, JObjectArray<'a, JObject<'a>>) -> Result<JObject<'a>, Error>
     + Send
     + Sync
     + 'static;
@@ -252,7 +252,7 @@ impl DynamicProxy {
         F: for<'f> Fn(
                 &mut Env<'f>,
                 JMethod<'f>,
-                JObjectArray<JObject<'f>>,
+                JObjectArray<'f, JObject<'f>>,
             ) -> Result<JObject<'f>, Error>
             + Send
             + Sync
@@ -360,7 +360,7 @@ fn rust_proxy_handler<'local>(
     _this: InvocHdl<'local>,
     id: jlong,
     method: JMethod<'local>,
-    mut args: JObjectArray<JObject<'local>>,
+    mut args: JObjectArray<'local, JObject<'local>>,
 ) -> Result<JObject<'local>, jni::errors::Error> {
     if method.is_null() {
         warn!("Proxy {id}: null `method` received in `rust_proxy_handler`."); // unreachable?

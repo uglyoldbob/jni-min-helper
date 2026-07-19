@@ -1,5 +1,9 @@
 # Changes
 
+## 0.4.4
+* Fixed `equals` and `hashCode` methods in `InvocHdl`.
+* Fixed type signature of the closure parameter of `DynamicProxy::build`.
+
 ## 0.4.3
 * Added public methods `has_category`, `set_package`, `set_type`, `add_category` and `set_class_name` for `Intent` binding.
 * `Intent::set_class` is made private because it involves the `AndroidContext` binding type which is currently private. (Not a breaking change, because it could not be used outside)
