@@ -42,6 +42,7 @@ bind_java_type! {
         IntentFilter => "android.content.IntentFilter",
     },
     methods {
+        fn get_application_context() -> AndroidContext,
         fn get_files_dir() -> JFile,
         fn get_cache_dir() -> JFile,
         fn get_code_cache_dir() -> JFile, // API level >= 21
@@ -195,9 +196,9 @@ impl<'local> DexClassLoader<'local> for JClassLoader<'local> {
 }
 
 /// Gets the current `android.content.Context` from [ndk_context](https://docs.rs/ndk-context),
-/// usually a reference of `android.app.Application` or `android.app.NativeActivity`.
-/// Please check the completed issue <https://github.com/rust-mobile/android-activity/issues/228>
-/// if you had expected a reference of an activity to be returned by this function.
+/// usually a reference of `android.app.Application`. Please check the completed issue
+/// <https://github.com/rust-mobile/android-activity/issues/228> if you had expected a reference
+/// of an activity to be returned by this function.
 pub fn android_context() -> &'static JObject<'static> {
     get_android_context().as_ref()
 }
@@ -214,23 +215,17 @@ pub(crate) fn get_android_context() -> &'static AndroidContext<'static> {
                 let ctx = unsafe {
                     env.as_cast_raw::<jni::refs::Global<AndroidContext<'static>>>(&ctx_raw_global)?
                 };
-                env.new_global_ref(ctx.as_ref())
-            } else {
-                let th = get_activity_thread(env)?;
-                let app = env
-                    .call_method(
-                        &th,
-                        jni_str!("getApplication"),
-                        jni::jni_sig!(() -> android.app.Application),
-                        &[],
-                    )?
-                    .l()?;
-                let ctx = AndroidContext::cast_local(env, app)?;
-                let ctx = env.new_global_ref(ctx)?;
-                if ctx.is_null() {
-                    panic!("got null from ActivityThread.getApplication()");
+                if let Ok(app) = ctx.get_application_context(env)
+                    && !app.is_null()
+                {
+                    env.new_global_ref(app)
+                } else {
+                    env.exception_clear();
+                    warn!("Cannot get the application context from the context pointed by `ndk_context`.");
+                    env.new_global_ref(ctx.as_ref())
                 }
-                Ok(ctx)
+            } else {
+                get_app_from_activity_thread(env)
             }
         })
         .unwrap()
@@ -238,14 +233,91 @@ pub(crate) fn get_android_context() -> &'static AndroidContext<'static> {
     ctx.as_ref()
 }
 
-fn get_activity_thread<'a>(env: &mut Env<'a>) -> Result<JObject<'a>, Error> {
-    env.call_static_method(
-        jni_str!("android/app/ActivityThread"),
-        jni_str!("currentActivityThread"),
-        jni_sig!(() -> android.app.ActivityThread),
-        &[],
-    )?
-    .l()
+fn get_app_from_activity_thread<'a>(
+    env: &mut Env<'a>,
+) -> Result<Global<AndroidContext<'static>>, Error> {
+    let th = env
+        .call_static_method(
+            jni_str!("android/app/ActivityThread"),
+            jni_str!("currentActivityThread"),
+            jni_sig!(() -> android.app.ActivityThread),
+            &[],
+        )?
+        .l()?;
+    let app = env
+        .call_method(
+            &th,
+            jni_str!("getApplication"),
+            jni::jni_sig!(() -> android.app.Application),
+            &[],
+        )?
+        .l()?;
+    let ctx = AndroidContext::cast_local(env, app)?;
+    let ctx = env.new_global_ref(ctx)?;
+    if ctx.is_null() {
+        return Err(Error::NullPtr(
+            "got null from ActivityThread.getApplication()",
+        ));
+    }
+    Ok(ctx)
+}
+
+/// Attempts to initialize `ndk_context`, returning false if already initialized,
+/// forgetting the panic produced in `ndk_context`. This is *unneeded* if the current
+/// application framework initializes `ndk_context` automatically.
+///
+/// This can be used in an exported native method defined in a native library.
+/// If needed, call that method in Java as early as possible.
+///
+/// DO NOT use this function if it is known that some component may try to initialize
+/// `ndk_context` at some later point (without forgetting the panic on failure).
+///
+/// # Safety
+///
+/// `ndk_context::initialize_android_context` is not thread-safe. Make sure that
+/// data racing with another initializer is impossible.
+pub unsafe fn try_init_ndk_context<'local>(
+    env: &mut jni::Env<'local>,
+    context: impl AsRef<JObject<'local>>,
+) -> Result<bool, jni::errors::Error> {
+    let mut inited_here = false;
+    let init_needed = !do_and_forget_panic(|| {
+        let _ = ndk_context::android_context();
+    });
+    if init_needed {
+        let vm = env.get_java_vm()?.get_raw() as _;
+        let ctx = if !context.as_ref().is_null() {
+            let casted = env.as_cast::<AndroidContext>(context.as_ref())?;
+            env.new_global_ref(casted.as_ref())?
+        } else {
+            get_app_from_activity_thread(env)?
+        }
+        .into_raw() as _;
+        // Safety: the JVM pointer will keep valid for the native library's lifetime;
+        // it is checked that `context` is a non-null reference of `android.content.Context`;
+        // the drop glue of `Global` is untouched because `Global::into_raw` is called.
+        if do_and_forget_panic(|| unsafe {
+            ndk_context::initialize_android_context(vm, ctx);
+        }) {
+            let ndk_ctx = ndk_context::android_context();
+            if ndk_ctx.vm() != vm || ndk_ctx.context() != ctx {
+                panic!("data race detected in `jni_min_helper::try_init_ndk_context`");
+            }
+            warn!("`ndk_context` is initialized by the `jni-min-helper` crate.");
+            inited_here = true;
+        }
+    }
+    Ok(inited_here)
+}
+
+fn do_and_forget_panic(f: impl FnOnce() + std::panic::UnwindSafe) -> bool {
+    let res = std::panic::catch_unwind(f);
+    if res.is_err() {
+        std::mem::forget(res);
+        false
+    } else {
+        true
+    }
 }
 
 /// Gets the API level (SDK version) of the current Android OS.

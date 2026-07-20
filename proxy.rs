@@ -82,7 +82,7 @@ jni::bind_java_type! {
 jni::bind_java_type! {
     AndroidLooper => "android.os.Looper",
     methods {
-        static fn get_main_looper() -> AndroidLooper,
+        static non_null fn get_main_looper() -> AndroidLooper,
     }
 }
 
@@ -112,7 +112,11 @@ static RUST_HANDLERS: LazyLock<Mutex<HashMap<i64, Arc<RustHandler>>>> =
 // Requiring all references here to have the same lifetime bounds doesn't introduce
 // any inconvenience outside, because these closures are called only in `rust_callback()`.
 // It's tested that returning a new local reference to the Java caller doesn't leak.
-type RustHandler = dyn for<'a> Fn(&mut Env<'a>, JMethod<'a>, JObjectArray<'a, JObject<'a>>) -> Result<JObject<'a>, Error>
+type RustHandler = dyn for<'a> Fn(
+        &mut Env<'a>,
+        JMethod<'a>,
+        JObjectArray<'a, JObject<'a>>,
+    ) -> Result<JObject<'a>, Error>
     + Send
     + Sync
     + 'static;
@@ -304,17 +308,24 @@ impl DynamicProxy {
     /// Please also consider using `AndroidApp::run_on_java_main_thread` if you are building
     /// an application based on the `android-activity` crate.
     pub fn post_to_main_looper(
-        runnable: impl Fn(&mut jni::Env) -> Result<(), Error> + Send + Sync + 'static,
+        runnable: impl FnOnce(&mut jni::Env) -> Result<(), Error> + Send + Sync + 'static,
     ) -> Result<bool, Error> {
+        use std::sync::OnceLock;
+        static MAIN_HANDLER: OnceLock<Global<AndroidHandler<'static>>> = OnceLock::new();
+
+        let runnable = Mutex::new(Some(Box::new(runnable)));
         crate::jni_with_env(|env| {
             let runnable = DynamicProxy::build(
                 env,
                 &LoaderContext::None,
                 [jni_str!("java/lang/Runnable")],
                 move |env, method, _| {
-                    if &method.get_name(env)?.to_string() == "run" {
-                        let _ = runnable(env);
-                        env.exception_clear();
+                    if method.get_name(env)?.to_string().trim() == "run" {
+                        let runnable = runnable.lock().unwrap().take();
+                        if let Some(runnable) = runnable {
+                            let _ = runnable(env);
+                            env.exception_clear();
+                        }
                     }
                     if let (Some(cur_id), Ok(mut hdls_locked)) =
                         (DynamicProxy::current_proxy_id(), RUST_HANDLERS.lock())
@@ -324,16 +335,14 @@ impl DynamicProxy {
                     Ok(JObject::null())
                 },
             )?;
-            let main_looper = AndroidLooper::get_main_looper(env)?;
-            if main_looper.is_null() {
-                return Err(Error::NullPtr(
-                    "android.os.Looper.getMainLooper() returned null",
-                ));
+            if MAIN_HANDLER.get().is_none() {
+                let main_looper = AndroidLooper::get_main_looper(env)?;
+                let handler = AndroidHandler::new(env, main_looper)?;
+                let _ = MAIN_HANDLER.set(env.new_global_ref(handler)?);
             }
-            let handler = AndroidHandler::new(env, main_looper)?;
             let new_runnable_ref = env.new_local_ref(runnable.as_ref())?;
             let casted_runnable = JRunnable::cast_local(env, new_runnable_ref)?;
-            let is_posted = handler.post(env, casted_runnable)?;
+            let is_posted = MAIN_HANDLER.get().unwrap().post(env, casted_runnable)?;
             if is_posted {
                 // the runnable will remove the handler by itself, when it is called for once
                 let _ = runnable.forget();

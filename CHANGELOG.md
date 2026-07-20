@@ -1,5 +1,13 @@
 # Changes
 
+## 0.4.5
+* `DynamicProxy::post_to_main_looper` now accepts `FnOnce` closure. The internal implementation may be improved in the future.
+* Function `android_context` now returns the `Application` context even if a global reference of `Activity` is stored in `ndk_context`.
+* Added `try_init_ndk_context` for usages in application frameworks that do not initialize the `ndk_context` crate.
+
+## 0.3.3
+* Backported the `InvocHdl` to version 0.3.x of this crate.
+
 ## 0.4.4
 * Fixed `equals` and `hashCode` methods in `InvocHdl`.
 * Fixed type signature of the closure parameter of `DynamicProxy::build`.
