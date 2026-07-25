@@ -1,5 +1,15 @@
 use jni::bind_java_type;
 
+jni::bind_java_type! {
+    pub(crate) JavaSystem => "java.lang.System",
+    methods {
+        /// Returns the same hash code for the given object as would be returned by the default method hashCode(),
+        /// whether or not the given object's class overrides hashCode(). As much as is reasonably practical,
+        /// the default `hashCode` method defined by class `Object` does return distinct integers for distinct objects.
+        static fn identity_hash_code(obj: JObject) -> jint,
+    }
+}
+
 bind_java_type! {
     pub(crate) JProxy => "java.lang.reflect.Proxy",
     type_map = {
@@ -196,6 +206,7 @@ fn verify_bindings() {
     jni_init_vm_for_unit_test();
     jni_with_env(|env| {
         let ctx = jni::refs::LoaderContext::None;
+        JavaSystemAPI::get(env, &ctx).unwrap();
         JProxyAPI::get(env, &ctx).unwrap();
         JInvocationHandlerAPI::get(env, &ctx).unwrap();
         JMethodAPI::get(env, &ctx).unwrap();

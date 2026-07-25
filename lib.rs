@@ -8,6 +8,10 @@
 //! Please check out <https://cjycode.com/flutter_rust_bridge/guides/how-to/ndk-init>
 //! if you are not using `android_activity` as the native activity entrypoint.
 //!
+//! On Android, this crate assumes that the native library using this crate is never
+//! unloaded during the application's lifetime, otherwise there would be soundness
+//! issues. See <https://github.com/jni-rs/jni-rs/issues/833>.
+//!
 //! Please make sure you are viewing documentation generated for your target.
 
 pub use bindings::*;
@@ -35,6 +39,8 @@ mod android;
 mod permission;
 #[cfg(target_os = "android")]
 mod permission_lifecycle;
+#[cfg(target_os = "android")]
+mod poster;
 #[cfg(target_os = "android")]
 mod receiver;
 

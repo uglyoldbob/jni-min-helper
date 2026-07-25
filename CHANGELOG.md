@@ -1,5 +1,11 @@
 # Changes
 
+## 0.4.6
+* Disabled direct usages of `DynamicProxy` before the unsafe `DynamicProxy::enable_usage` for desktop platforms. See <https://github.com/jni-rs/jni-rs/issues/833>. Not releasing version 0.5.0 for this issue, because no dependent of this crate (on `crates.io`) uses it on desktop platforms.
+* Added `DynamicProxy::post_to_main_looper_async` (requires the `futures` feature).
+* Optimized `DynamicProxy::post_to_main_looper` by the static `Runnable` implementation class `RunOnce`. This should be moved from `DynamicProxy` in version 0.5.0.
+* Improved ID verification in `DynamicProxy`.
+
 ## 0.4.5
 * `DynamicProxy::post_to_main_looper` now accepts `FnOnce` closure. The internal implementation may be improved in the future.
 * Function `android_context` now returns the `Application` context even if a global reference of `Activity` is stored in `ndk_context`.
