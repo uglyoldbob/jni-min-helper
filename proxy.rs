@@ -1,4 +1,7 @@
-use crate::bindings::{JInvocationHandler, JMethod, JProxy};
+use crate::{
+    JavaSystem,
+    bindings::{JInvocationHandler, JMethod, JProxy},
+};
 
 use jni::{
     Env,
@@ -7,7 +10,7 @@ use jni::{
     jni_str,
     objects::{JClass, JClassLoader, JObject, JObjectArray},
     refs::{Global, LoaderContext},
-    sys::jlong,
+    sys::{jint, jlong},
 };
 use std::{
     cell::Cell,
@@ -37,8 +40,8 @@ jni::bind_java_type! {
     },
     native_methods_export = false,
     native_methods {
-        fn rust_hdl {
-            sig = (id: jlong, method: JMethod, args: JObject[]) -> JObject,
+        static fn rust_hdl {
+            sig = (id: jlong, invoc_hdl_id: jint, method: JMethod, args: JObject[]) -> JObject,
             fn = rust_proxy_handler,
         },
     },
@@ -73,38 +76,14 @@ jni::bind_java_type! {
     },
 }
 
-#[cfg(target_os = "android")]
-jni::bind_java_type! {
-    JRunnable => "java.lang.Runnable",
-}
-
-#[cfg(target_os = "android")]
-jni::bind_java_type! {
-    AndroidLooper => "android.os.Looper",
-    methods {
-        static non_null fn get_main_looper() -> AndroidLooper,
-    }
-}
-
-#[cfg(target_os = "android")]
-jni::bind_java_type! {
-    AndroidHandler => "android.os.Handler",
-    type_map = {
-        AndroidLooper => "android.os.Looper",
-        JRunnable => "java.lang.Runnable",
-    },
-    constructors {
-        fn new(looper: AndroidLooper),
-    },
-    methods {
-        fn post(r: JRunnable) -> jboolean,
-    }
-}
+#[cfg(not(target_os = "android"))]
+static IS_PROXY_PERMITTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 // Maps Java invocation handler IDs to Rust closures.
 // `LazyLock` is required for a const initializer.
 // `Arc` is required for having `dyn` closures and using them after dropping the MutexGuard.
-static RUST_HANDLERS: LazyLock<Mutex<HashMap<i64, Arc<RustHandler>>>> =
+type RustHandlerMap = HashMap<i64, (i32, Arc<RustHandler>)>;
+static RUST_HANDLERS: LazyLock<Mutex<RustHandlerMap>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 // The lifetime sugar cannot apply here, because the closure requires multiple reference
@@ -142,6 +121,11 @@ thread_local! {
 /// use jni::{jni_sig, jni_str, objects::*};
 /// use jni_min_helper::*;
 /// jni_init_vm_for_unit_test();
+/// unsafe {
+///     // Safety: here the JVM is launched by the native executable, of course
+///     // the executable's process outlives proxy objects created here.
+///     DynamicProxy::enable_usage();
+/// }
 /// jni_with_env(|env| {
 ///     let proxy = DynamicProxy::build(
 ///         env,
@@ -232,6 +216,7 @@ impl Drop for DynamicProxy {
 
 impl DynamicProxy {
     /// Creates a Java dynamic proxy with a new invocation handler backed by the Rust closure.
+    /// Please check [Self::enable_usage] for desktop platforms.
     ///
     /// A class loader is needed if the interface definition is loaded from embeded class/dex data;
     /// in such case, `interfaces` should not be strings. Otherwise they can be strings of Java
@@ -262,6 +247,11 @@ impl DynamicProxy {
             + Sync
             + 'static,
     {
+        #[cfg(not(target_os = "android"))]
+        if IS_PROXY_PERMITTED.get().is_none() {
+            return Err(Error::SecurityViolation);
+        }
+
         let class_loader = match loader_context {
             LoaderContext::Loader(loader) => env.new_local_ref(loader)?,
             LoaderContext::FromObject(obj) => env.get_object_class(obj)?.get_class_loader(env)?,
@@ -281,16 +271,48 @@ impl DynamicProxy {
         let mut handlers_locked = RUST_HANDLERS.lock().unwrap();
         let id: i64 = new_hdl_id(&handlers_locked);
         let invoc_hdl = InvocHdl::new(env, id)?;
+        let invoc_hdl_id = JavaSystem::identity_hash_code(env, &invoc_hdl)?;
         let proxy = JProxy::new_proxy_instance(env, &class_loader, &arr_interfaces, &invoc_hdl)
             .inspect_err(|_| {
                 env.exception_describe();
             })?;
         let proxy = env.new_global_ref(proxy)?;
-        handlers_locked.insert(id, Arc::new(handler));
+        handlers_locked.insert(id, (invoc_hdl_id, Arc::new(handler)));
         Ok(Self {
             rust_hdl_id: id,
             java_proxy: Some(proxy),
         })
+    }
+
+    /// (For desktop platforms only) Enables creation of dynamic proxies.
+    /// Before this is called, [Self::build] always returns an error.
+    ///
+    /// # Safety
+    ///
+    /// The native library using `jni-min-helper` should not be unloaded during
+    /// the lifetime of all dynamic proxy objects created here. If not sure,
+    /// please try to leak a JNI global reference of the class loader that has
+    /// loaded the native library, or calling [Self::disable_usage_permanently]
+    /// when unloading of the native library becomes possible.
+    ///
+    /// Please check <https://github.com/jni-rs/jni-rs/issues/833>.
+    #[cfg(not(target_os = "android"))]
+    pub unsafe fn enable_usage() {
+        let _ = IS_PROXY_PERMITTED.set(());
+    }
+
+    /// Call this if it is needed for the safety requirements of [Self::enable_usage].
+    /// After this call, future method calls to proxies created by this crate will
+    /// return `java.lang.UnsatisfiedLinkError`.
+    #[cfg(not(target_os = "android"))]
+    pub fn disable_usage_permanently() {
+        crate::jni_with_env(|env| {
+            use jni::refs::Reference;
+            use std::ops::Deref;
+            let cls = InvocHdl::lookup_class(env, &jni::refs::LoaderContext::None)?;
+            env.unregister_native_methods(cls.deref())
+        })
+        .unwrap()
     }
 
     /// Gets the invoked proxy ID inside the Rust handler closure for debugging;
@@ -300,60 +322,8 @@ impl DynamicProxy {
     }
 }
 
-#[cfg(target_os = "android")]
-impl DynamicProxy {
-    /// Posts a `Runnable` for the Android main looper thread to do UI-related operations.
-    /// Returns false on failure (usually because the looper is exiting).
-    ///
-    /// Please also consider using `AndroidApp::run_on_java_main_thread` if you are building
-    /// an application based on the `android-activity` crate.
-    pub fn post_to_main_looper(
-        runnable: impl FnOnce(&mut jni::Env) -> Result<(), Error> + Send + Sync + 'static,
-    ) -> Result<bool, Error> {
-        use std::sync::OnceLock;
-        static MAIN_HANDLER: OnceLock<Global<AndroidHandler<'static>>> = OnceLock::new();
-
-        let runnable = Mutex::new(Some(Box::new(runnable)));
-        crate::jni_with_env(|env| {
-            let runnable = DynamicProxy::build(
-                env,
-                &LoaderContext::None,
-                [jni_str!("java/lang/Runnable")],
-                move |env, method, _| {
-                    if method.get_name(env)?.to_string().trim() == "run" {
-                        let runnable = runnable.lock().unwrap().take();
-                        if let Some(runnable) = runnable {
-                            let _ = runnable(env);
-                            env.exception_clear();
-                        }
-                    }
-                    if let (Some(cur_id), Ok(mut hdls_locked)) =
-                        (DynamicProxy::current_proxy_id(), RUST_HANDLERS.lock())
-                    {
-                        let _ = hdls_locked.remove(&cur_id);
-                    }
-                    Ok(JObject::null())
-                },
-            )?;
-            if MAIN_HANDLER.get().is_none() {
-                let main_looper = AndroidLooper::get_main_looper(env)?;
-                let handler = AndroidHandler::new(env, main_looper)?;
-                let _ = MAIN_HANDLER.set(env.new_global_ref(handler)?);
-            }
-            let new_runnable_ref = env.new_local_ref(runnable.as_ref())?;
-            let casted_runnable = JRunnable::cast_local(env, new_runnable_ref)?;
-            let is_posted = MAIN_HANDLER.get().unwrap().post(env, casted_runnable)?;
-            if is_posted {
-                // the runnable will remove the handler by itself, when it is called for once
-                let _ = runnable.forget();
-            }
-            Ok(is_posted)
-        })
-    }
-}
-
 // Note: this function depends on `clock_gettime()` on UNIX, including Android.
-fn new_hdl_id(handlers_locked: &HashMap<i64, Arc<RustHandler>>) -> i64 {
+fn new_hdl_id(handlers_locked: &RustHandlerMap) -> i64 {
     static STARTUP_INSTANT: LazyLock<Instant> = LazyLock::new(Instant::now);
     loop {
         let nanos = STARTUP_INSTANT.elapsed().as_nanos();
@@ -366,8 +336,9 @@ fn new_hdl_id(handlers_locked: &HashMap<i64, Arc<RustHandler>>) -> i64 {
 
 fn rust_proxy_handler<'local>(
     env: &mut Env<'local>,
-    _this: InvocHdl<'local>,
+    _class: JClass<'local>,
     id: jlong,
+    invoc_hdl_id: jint,
     method: JMethod<'local>,
     mut args: JObjectArray<'local, JObject<'local>>,
 ) -> Result<JObject<'local>, jni::errors::Error> {
@@ -379,7 +350,9 @@ fn rust_proxy_handler<'local>(
         args = JObjectArray::<JObject>::new(env, 0, JObject::null())?;
     }
     let lock = RUST_HANDLERS.lock().unwrap();
-    let rust_hdl = if let Some(f) = (*lock).get(&id) {
+    let rust_hdl = if let Some((invoc_id, f)) = (*lock).get(&id)
+        && *invoc_id == invoc_hdl_id
+    {
         f.clone()
     } else {
         warn!("Proxy {id} is used, but the Rust handler has been dropped.");
