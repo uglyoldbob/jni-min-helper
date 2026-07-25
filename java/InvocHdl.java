@@ -8,7 +8,8 @@ public class InvocHdl implements InvocationHandler {
     long rust_hdl_id;
 
     // to be registered in native code
-    private native Object rustHdl(long id, Method method, Object[] args) throws Throwable;
+    private static native Object rustHdl(long id, int invoc_hdl_id, Method method, Object[] args)
+        throws Throwable;
 
     public InvocHdl(long id) {
         this.rust_hdl_id = id;
@@ -44,6 +45,6 @@ public class InvocHdl implements InvocationHandler {
         if (methodName.equals("toString")) {
             return "rust.jniminhelper.InvocHdl[" + this.rust_hdl_id + "]";
         }
-        return rustHdl(this.rust_hdl_id, method, args);
+        return rustHdl(this.rust_hdl_id, System.identityHashCode(this), method, args);
     }
 }
