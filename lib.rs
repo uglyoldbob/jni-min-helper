@@ -18,7 +18,7 @@ pub use bindings::*;
 pub use proxy::*;
 
 #[cfg(target_os = "android")]
-pub use {android::*, permission::*, receiver::*};
+pub use {android::*, permission::*, permission_lifecycle::*, receiver::*};
 
 #[cfg(not(target_os = "android"))]
 macro_rules! warn {
@@ -37,6 +37,8 @@ mod proxy;
 mod android;
 #[cfg(target_os = "android")]
 mod permission;
+#[cfg(target_os = "android")]
+mod permission_lifecycle;
 #[cfg(target_os = "android")]
 mod poster;
 #[cfg(target_os = "android")]
