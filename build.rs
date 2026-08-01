@@ -26,7 +26,6 @@ fn main() {
             src_dir.join("InvocHdl.java"),
             src_dir.join("BroadcastRec.java"),
             src_dir.join("RunOnce.java"),
-            src_dir.join("PermActivity.java"),
         ];
         let android_jar = android_build::android_jar(None);
 

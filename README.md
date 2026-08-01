@@ -37,7 +37,7 @@ publish = false
 [dependencies]
 log = "0.4"
 jni = "0.22.4"
-jni-min-helper = "0.4.5"
+jni-min-helper = "0.4.7"
 android-activity = { version = "0.6.1", features = ["native-activity"] }
 android_logger = "0.15"
 
@@ -170,7 +170,7 @@ fn on_receive<'a>(
 <summary>Using the asynchronous broadcast waiter</summary>
 
 ```toml
-jni-min-helper = { version = "0.4.5", features = ["futures"] }
+jni-min-helper = { version = "0.4.7", features = ["futures"] }
 ```
 
 ```rust
@@ -462,7 +462,7 @@ publish = false
 
 [dependencies]
 log = "0.4"
-jni-min-helper = "0.4.5"
+jni-min-helper = "0.4.7"
 android-activity = { version = "0.6.1", features = ["native-activity"] }
 android_logger = "0.15"
 
@@ -482,10 +482,10 @@ min_sdk_version = 23
 target_sdk_version = 33
 
 [[package.metadata.android.uses_permission]]
-name = "android.permission.READ_EXTERNAL_STORAGE"
+name = "android.permission.ACCESS_FINE_LOCATION"
 
 [[package.metadata.android.uses_permission]]
-name = "android.permission.WRITE_EXTERNAL_STORAGE"
+name = "android.permission.READ_CALENDAR"
 
 [[package.metadata.android.application.activity]]
 name = "android.app.NativeActivity"
@@ -510,15 +510,15 @@ use jni_min_helper::{PermissionRequest, android_app_name};
 fn android_main(app: AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
+            .with_max_level(log::LevelFilter::Debug)
             .with_tag(android_app_name().as_bytes()),
     );
 
     let mut request = PermissionRequest::request(
-        "Read and write external files",
+        "Get precise location and read calendar",
         [
-            "android.permission.READ_EXTERNAL_STORAGE",
-            "android.permission.WRITE_EXTERNAL_STORAGE",
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.READ_CALENDAR",
         ],
     )
     .unwrap();

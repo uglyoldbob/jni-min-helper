@@ -1,5 +1,14 @@
 # Changes
 
+## 0.4.7
+* Fixed `DynamicProxy::post_to_main_looper_async`, avoid using `futures_lite::futures::block_on` when the timeout is given.
+* Added function `pin_current_cdylib` which is being used internally. Removed desktop-only `DynamicProxy::enable_usage` and `DynamicProxy::disable_usage_permanently`, yanked version 0.4.6.
+* Added methods `get_flags` and `set_flags` for `Intent` binding.
+* Fixed the `android.util.AndroidRuntimeException` that may be produced by `PermissionRequest`: "Calling startActivity() from outside of an Activity context requires the FLAG_ACTIVITY_NEW_TASK flag. Is this really what you want?".
+* Applied a fix for the `PermissionRequest` problem of blocking forever in case of `PermActivity` is not really started because the application is in background state; added `request_with_activity` for pure native activity applications. (Thanks to @enomado on Github)
+* Verify all `bind_java_type` bindings except `PermActivity` at first `jni_with_env` call.
+* Print a warning while doing the `ActivityThread.getApplication()` trick, which is not a really reliable API.
+
 ## 0.4.6
 * Disabled direct usages of `DynamicProxy` before the unsafe `DynamicProxy::enable_usage` for desktop platforms. See <https://github.com/jni-rs/jni-rs/issues/833>. Not releasing version 0.5.0 for this issue, because no dependent of this crate (on `crates.io`) uses it on desktop platforms.
 * Added `DynamicProxy::post_to_main_looper_async` (requires the `futures` feature).

@@ -7,7 +7,9 @@ import android.content.Intent;
 public class PermActivity extends Activity {
     static final String EXTRA_PERM_ARRAY = "rust.jniminhelper.perm_array";
     static final String EXTRA_TITLE = "rust.jniminhelper.perm_activity_title";
-    
+
+    private String[] permissions;
+
     // to be registered in native code
     private native void nativeOnRequestPermissionsResult(String[] permissions, int[] grantResults);
 
@@ -15,10 +17,9 @@ public class PermActivity extends Activity {
 	protected void onCreate(Bundle savedInstanceState) {
 	    super.onCreate(savedInstanceState);
 	    Intent intent = this.getIntent();
-	    String[] permissions = intent.getStringArrayExtra(EXTRA_PERM_ARRAY);
-	    this.requestPermissions(permissions, 0);
+	    this.permissions = intent.getStringArrayExtra(EXTRA_PERM_ARRAY);
 	}
-	
+
 	@Override
 	protected void onStart() {
 	    super.onStart();
@@ -26,7 +27,13 @@ public class PermActivity extends Activity {
 	    String title = intent.getStringExtra(EXTRA_TITLE);
 	    this.setTitle(title);
 	}
-	
+
+	@Override
+	protected void onResume() {
+	    super.onResume();
+	    this.requestPermissions(this.permissions, 0);
+	}
+
     @Override
     public void onRequestPermissionsResult(int requestCode,
         String[] permissions, int[] grantResults)

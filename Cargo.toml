@@ -1,8 +1,12 @@
 [package]
 name = "jni-min-helper"
-version = "0.4.6"
-authors = ["wuwbobo2021 <wuwbobo@outlook.com>, Thomas Epperson <thomas.epperson@gmail.com>"]
+version = "0.4.7"
+authors = [
+    "wuwbobo2021 <wuwbobo@outlook.com>",
+    "Thomas Epperson <thomas.epperson@gmail.com>",
+]
 edition = "2024"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/uglyoldbob/jni-min-helper"
 readme = "README.md"
@@ -24,8 +28,11 @@ targets = [
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 jni = { version = "0.22.4", features = ["invocation"] }
+dlopen2 = { version = "0.9.0", default-features = false }
+process_path = "0.1.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2.189"
 log = "0.4"
 jni = "0.22.4"
 ndk-context = "0.1"
@@ -39,6 +46,7 @@ futures-lite = { version = "2.6", optional = true }
 android-build = "0.1.4"
 
 [features]
+default = []
 # Enables `BroadcastWaiter` based on `BroadcastReceiver`, and `Future` for `PermissionRequest`.
 futures = [
     "dep:futures-core",

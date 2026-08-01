@@ -1,7 +1,9 @@
 use crate::{
     AndroidContextApi33,
-    android::{AndroidContext, get_android_context, get_helper_class_loader},
-    android_api_level, jni_with_env,
+    android::{get_android_context, get_helper_class_loader},
+    android_api_level,
+    bindings::{AndroidBroadcastReceiver, Intent, IntentFilter},
+    jni_with_env,
     proxy::DynamicProxy,
 };
 
@@ -11,188 +13,6 @@ use jni::{
     objects::{JClass, JObject, JString},
     refs::{Global, Reference},
 };
-
-jni::bind_java_type! {
-    pub Intent => "android.content.Intent",
-    type_map = {
-        AndroidContext => "android.content.Context",
-        AndroidParcelable => "android.os.Parcelable",
-    },
-    constructors {
-        fn new(),
-        fn new_with_action(action: JString),
-    },
-    methods {
-        fn get_package() -> JString,
-        fn get_type() -> JString,
-        fn get_action() -> JString,
-        fn has_extra(name: JString) -> jboolean,
-        fn has_category(category: JString) -> jboolean,
-        fn get_string_extra(name: JString) -> JString,
-        fn get_int_extra(name: JString, default_value: jint) -> jint,
-        fn get_short_extra(name: JString, default_value: jshort) -> jshort,
-        fn get_long_extra(name: JString, default_value: jlong) -> jlong,
-        fn get_float_extra(name: JString, default_value: jfloat) -> jfloat,
-        fn get_double_extra(name: JString, default_value: jdouble) -> jdouble,
-        fn get_byte_extra(name: JString, default_value: jbyte) -> jbyte,
-        fn get_char_extra(name: JString, default_value: jchar) -> jchar,
-        fn get_boolean_extra(name: JString, default_value: jboolean) -> jboolean,
-        fn get_byte_array_extra(name: JString) -> jbyte[],
-        fn set_package(package_name: JString) -> Intent,
-        fn set_type(type_name: JString) -> Intent,
-        fn add_category(category: JString) -> Intent,
-        fn set_action(action: JString) -> Intent,
-        pub(crate) fn set_class(package_context: AndroidContext, cls: JClass) -> Intent,
-        fn set_class_name(package_name: JString, class_name: JString) -> Intent,
-        fn put_extra_bool {
-            name = "putExtra",
-            sig = (name: JString, value: jboolean) -> Intent,
-        },
-        fn put_extra_byte {
-            name = "putExtra",
-            sig = (name: JString, value: jbyte) -> Intent,
-        },
-        fn put_extra_byte_array {
-            name = "putExtra",
-            sig = (name: JString, value: jbyte[]) -> Intent,
-        },
-        fn put_extra_char {
-            name = "putExtra",
-            sig = (name: JString, value: jchar) -> Intent,
-        },
-        fn put_extra_double {
-            name = "putExtra",
-            sig = (name: JString, value: jdouble) -> Intent,
-        },
-        fn put_extra_float {
-            name = "putExtra",
-            sig = (name: JString, value: jfloat) -> Intent,
-        },
-        fn put_extra_int {
-            name = "putExtra",
-            sig = (name: JString, value: jint) -> Intent,
-        },
-        fn put_extra_long {
-            name = "putExtra",
-            sig = (name: JString, value: jlong) -> Intent,
-        },
-        fn put_extra_short {
-            name = "putExtra",
-            sig = (name: JString, value: jshort) -> Intent,
-        },
-        fn put_extra_string {
-            name = "putExtra",
-            sig = (name: JString, value: JString) -> Intent,
-        },
-        fn put_extra_string_array {
-            name = "putExtra",
-            sig = (name: JString, value: JString[]) -> Intent,
-        },
-        priv fn put_extra_parcelable_internal {
-            name = "putExtra",
-            sig = (name: JString, value: AndroidParcelable) -> Intent,
-        }
-    },
-}
-
-jni::bind_java_type! {
-    AndroidParcelable => "android.os.Parcelable",
-}
-
-mod parcelable_extra {
-    use super::{AndroidParcelable, Intent};
-    use crate::android_api_level;
-    use jni::{
-        Env,
-        errors::Error,
-        objects::{JClass, JObject, JString},
-        refs::{Cast, Reference},
-    };
-    // TODO: remove these extra bindings when <https://github.com/jni-rs/jni-rs/issues/764> is resolved.
-    jni::bind_java_type! {
-        pub IntentApi32 => "android.content.Intent",
-        type_map = {
-            AndroidParcelable => "android.os.Parcelable",
-        },
-        methods {
-            // public @Nullable <T extends Parcelable> T getParcelableExtra(String name)
-            fn get_parcelable_extra {
-                name = "getParcelableExtra",
-                sig = (name: JString) -> AndroidParcelable,
-            },
-        },
-    }
-    jni::bind_java_type! {
-        pub IntentApi33 => "android.content.Intent",
-        methods {
-            // public @Nullable <T> T getParcelableExtra(@Nullable String name, @NonNull Class<T> clazz)
-            fn get_parcelable_extra {
-                name = "getParcelableExtra",
-                sig = (name: JString, class: JClass) -> JObject,
-            },
-        },
-    }
-    impl<'local> Intent<'local> {
-        pub fn put_extra_parcelable<'local_0, 'local_1>(
-            &self,
-            env: &mut Env,
-            name: impl AsRef<JString<'local_0>>,
-            value: impl AsRef<JObject<'local_1>>,
-        ) -> Result<(), Error> {
-            let value: Cast<'_, '_, AndroidParcelable> = env.as_cast(value.as_ref())?;
-            self.put_extra_parcelable_internal(env, name, value)?;
-            Ok(())
-        }
-
-        pub fn get_parcelable_extra<'env_local, 'local_0, 'local_1>(
-            &self,
-            env: &mut Env<'env_local>,
-            name: impl AsRef<JString<'local_0>>,
-            class: impl AsRef<JClass<'local_1>>,
-        ) -> Result<JObject<'env_local>, Error> {
-            if name.as_ref().is_null() {
-                return Err(Error::NullPtr(
-                    "null `name` provided for `get_parcelable_extra`",
-                ));
-            }
-            if class.as_ref().is_null() {
-                return Err(Error::NullPtr(
-                    "null `class` provided for `get_parcelable_extra`",
-                ));
-            }
-            if android_api_level() >= 33 {
-                // Safety: `Intent` and `IntentApi33` both map to `android.content.Intent`.
-                let intent: Cast<'_, '_, IntentApi33> = unsafe { env.as_cast_unchecked(self) };
-                intent.get_parcelable_extra(env, name, class)
-            } else {
-                // Safety: `Intent` and `IntentApi32` both map to `android.content.Intent`.
-                let intent: Cast<'_, '_, IntentApi32> = unsafe { env.as_cast_unchecked(self) };
-                let extra: JObject = intent.get_parcelable_extra(env, name).map(Into::into)?;
-                if !extra.is_null() && !env.is_instance_of(&extra, class.as_ref())? {
-                    return Err(Error::WrongObjectType);
-                }
-                Ok(extra)
-            }
-        }
-    }
-}
-
-jni::bind_java_type! {
-    pub IntentFilter => "android.content.IntentFilter",
-    constructors {
-        fn new(),
-        fn new_with_action(action: JString),
-    },
-    methods {
-        fn add_action(action: JString),
-        fn add_category(category: JString),
-        fn add_data_type(type_: JString),
-    }
-}
-
-jni::bind_java_type! {
-    pub(crate) AndroidBroadcastReceiver => "android.content.BroadcastReceiver",
-}
 
 jni::bind_java_type! {
     BroadcastRec => "rust.jniminhelper.BroadcastRec",
@@ -257,7 +77,7 @@ impl BroadcastReceiver {
         + 'static,
     ) -> Result<Self, Error> {
         jni_with_env(|env| {
-            let loader = &jni::refs::LoaderContext::Loader(get_helper_class_loader()?);
+            let loader = &jni::refs::LoaderContext::Loader(get_helper_class_loader(env)?);
             let _ = BroadcastRecHdlAPI::get(env, loader)?;
             let _ = BroadcastRecAPI::get(env, loader)?;
             let cls_rec_hdl = BroadcastRecHdl::lookup_class(env, loader)?;
@@ -309,7 +129,7 @@ impl BroadcastReceiver {
         exported: bool,
     ) -> Result<(), Error> {
         jni_with_env(|env| {
-            let context = get_android_context();
+            let context = get_android_context(env)?;
             if android_api_level() >= 33 {
                 let flag = if exported {
                     AndroidContextApi33::RECEIVER_EXPORTED
@@ -354,7 +174,7 @@ impl BroadcastReceiver {
     #[inline(always)]
     pub fn unregister(&self) -> Result<(), Error> {
         jni_with_env(|env| {
-            let context = get_android_context();
+            let context = get_android_context(env)?;
             context.unregister_receiver(env, &self.receiver).map(|_| ())
         })
     }
@@ -451,20 +271,28 @@ mod waiter {
         }
     }
 
-    /// Convenient blocker for asynchronous functions, based on `futures_lite` and `futures_timer`.
-    /// Warning: Blocking in the `android_main()` thread will block the future's completion if it
-    /// depends on event processing in this thread (check your glue crate like `android_activity`).
+    /// Convenient blocker for asynchronous functions, based on `futures_lite::future::block_on`
+    /// and `futures_timer`. Warning: Blocking in the main looper thread or the native activity's
+    /// `android_main()` may block the future's completion if it depends on event processing of
+    /// the main looper (check your glue crate like `android_activity`).
     pub fn block_with_timeout<T>(
         fut: impl std::future::Future<Output = T>,
         dur: std::time::Duration,
     ) -> Option<T> {
-        use futures_lite::{FutureExt, future::block_on};
+        futures_lite::future::block_on(async_with_timeout(fut, dur))
+    }
+
+    pub(crate) async fn async_with_timeout<T>(
+        fut: impl std::future::Future<Output = T>,
+        dur: std::time::Duration,
+    ) -> Option<T> {
+        use futures_lite::FutureExt;
         let fut_comp = async { Some(fut.await) };
         let fut_cancel = async {
             futures_timer::Delay::new(dur).await;
             None
         };
-        block_on(fut_comp.or(fut_cancel))
+        fut_comp.or(fut_cancel).await
     }
 
     impl futures_core::Stream for BroadcastWaiter {
@@ -497,7 +325,7 @@ mod waiter {
         waiter: &'a mut BroadcastWaiter,
     }
 
-    impl<'a> std::future::Future for BroadcastWaiterFuture<'a> {
+    impl std::future::Future for BroadcastWaiterFuture<'_> {
         type Output = Option<Global<Intent<'static>>>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {

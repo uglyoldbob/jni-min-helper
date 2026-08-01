@@ -3,20 +3,11 @@
 //! # Safety of Java-owned Rust heap objects
 //!
 //! The risks described in <https://github.com/jni-rs/jni-rs/issues/833> is reduced
-//! by the trick being used here, but not really eliminated.
-//!
-//! Because `DexClassLoader` and dynamic registeration of native methods are used here,
-//! the dex class loader of `RunOnce` is *not* the same loader that loaded the native
-//! library that holds native methods of `RunOnce`; in some possible edge cases, this
-//! native library might be unloaded before `RunOnce` instances are destroyed.
-//!
-//! To solve this problem, the static `LifeChecker` Java object is created once for
-//! the native library's lifetime; it should be passed to all Java-side proxy objects
-//! carrying raw pointer of Rust Arc/Box, and passed back to all native methods for
-//! the native library to check it against the `LifeChecker` in the static storage.
+//! by the trick being used here, making sure the `Box` pointer usage is safe. After
+//! applying the `pin_current_cdylib` fix, this becomes an extra double check:
 //!
 //! In case of the library is unloaded and then loaded again, a new `LifeChecker`
-//! is created here; if a previous `RunOnce` can enter its native `runonce_handler`,
+//! is created here; in case of a previous `RunOnce` can enter its native handler,
 //! `check_lib_life_against` will detect that its `LifeChecker` and the current
 //! `NATIVE_LIB_LIFE_CHECKER` are not the same object, it will prevent the invalid
 //! pointer value from this `RunOnce` from being casted.
@@ -42,7 +33,12 @@ use jni::{
     sys::jlong,
 };
 
-use crate::{DynamicProxy, android::get_helper_class_loader, jni_with_env};
+use crate::{
+    DynamicProxy,
+    android::get_helper_class_loader,
+    bindings::{AndroidHandler, AndroidLooper, JRunnable},
+    jni_with_env,
+};
 
 type RunnableClosure = dyn FnOnce(&mut jni::Env) -> Result<(), Error> + Send + Sync + 'static;
 type RunnableClosureBox = Box<Box<RunnableClosure>>;
@@ -70,33 +66,7 @@ fn check_lib_life_against(env: &mut Env, current: LifeChecker) -> Result<bool, E
 }
 
 jni::bind_java_type! {
-    JRunnable => "java.lang.Runnable",
-}
-
-jni::bind_java_type! {
-    AndroidLooper => "android.os.Looper",
-    methods {
-        static non_null fn get_main_looper() -> AndroidLooper,
-        non_null fn get_thread() -> JThread,
-    }
-}
-
-jni::bind_java_type! {
-    AndroidHandler => "android.os.Handler",
-    type_map = {
-        AndroidLooper => "android.os.Looper",
-        JRunnable => "java.lang.Runnable",
-    },
-    constructors {
-        fn new(looper: AndroidLooper),
-    },
-    methods {
-        fn post(r: JRunnable) -> jboolean,
-    }
-}
-
-jni::bind_java_type! {
-    RunOnce => "rust.jniminhelper.RunOnce",
+    pub(crate) RunOnce => "rust.jniminhelper.RunOnce",
     type_map = {
         JRunnable => "java.lang.Runnable",
     },
@@ -119,7 +89,7 @@ jni::bind_java_type! {
     },
     hooks = {
         load_class = |env, _load_context, initialize| {
-            let loader_context = LoaderContext::Loader(get_helper_class_loader()?);
+            let loader_context = LoaderContext::Loader(get_helper_class_loader(env)?);
             loader_context.load_class(env, jni_str!("rust.jniminhelper.RunOnce"), initialize)
         },
     }
@@ -167,6 +137,9 @@ impl DynamicProxy {
     /// This does `post_to_main_looper` and waits for the result from `closure` if the current
     /// thread is not the Android main looper thread; otherwise it runs `closure` immediately.
     ///
+    /// Warning: Do not block on this with something like `futures_lite::futures::block_on`
+    /// in `android_main()` of the glue crate `android_activity`.
+    ///
     /// Returns `Ok(None)` if `post_to_main_looper` returns `false`, or the `timeout` is reached
     /// while waiting for the result to be returned from `closure`.
     #[cfg(feature = "futures")]
@@ -179,7 +152,7 @@ impl DynamicProxy {
         R: Send + 'static,
         E: From<Error> + Send + 'static,
     {
-        if is_current_thread_main_looper()? {
+        if crate::android::is_current_thread_main_looper()? {
             let vm = crate::jni_get_vm();
             vm.attach_current_thread(|env| closure(env).map(|r| Some(r)))
         } else {
@@ -192,7 +165,7 @@ impl DynamicProxy {
                 return Ok(None);
             }
             if let Some(dur) = timeout {
-                match crate::block_with_timeout(rx, dur) {
+                match crate::async_with_timeout(rx, dur).await {
                     Some(Ok(res)) => res.map(|r| Some(r)),
                     _ => Ok(None),
                 }
@@ -204,27 +177,6 @@ impl DynamicProxy {
             }
         }
     }
-}
-
-#[cfg(feature = "futures")]
-fn is_current_thread_main_looper() -> Result<bool, Error> {
-    use jni::objects::JThread;
-
-    // Java thread ID should not change once the thread is created.
-    static MAIN_LOOPER_TID: OnceLock<jni::sys::jlong> = OnceLock::new();
-    if MAIN_LOOPER_TID.get().is_none() {
-        jni_with_env(|env| {
-            let main_looper = AndroidLooper::get_main_looper(env)?;
-            let main_thread = main_looper.get_thread(env)?;
-            let _ = MAIN_LOOPER_TID.set(main_thread.get_id(env)?);
-            Ok(())
-        })?;
-    }
-    let cur_id = jni_with_env(|env| {
-        let current_thread = JThread::current_thread(env)?;
-        current_thread.get_id(env)
-    })?;
-    Ok(cur_id == *MAIN_LOOPER_TID.get().unwrap())
 }
 
 fn runonce_handler<'local>(

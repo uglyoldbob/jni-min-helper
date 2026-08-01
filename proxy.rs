@@ -67,7 +67,7 @@ jni::bind_java_type! {
             #[cfg(target_os = "android")]
             let class_loader = {
                 let _ = load_context;
-                crate::get_helper_class_loader()?
+                crate::get_helper_class_loader(env)?
             };
             #[allow(clippy::needless_borrow)]
             let loader_context = LoaderContext::Loader(&class_loader);
@@ -75,9 +75,6 @@ jni::bind_java_type! {
         },
     },
 }
-
-#[cfg(not(target_os = "android"))]
-static IS_PROXY_PERMITTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 // Maps Java invocation handler IDs to Rust closures.
 // `LazyLock` is required for a const initializer.
@@ -121,11 +118,6 @@ thread_local! {
 /// use jni::{jni_sig, jni_str, objects::*};
 /// use jni_min_helper::*;
 /// jni_init_vm_for_unit_test();
-/// unsafe {
-///     // Safety: here the JVM is launched by the native executable, of course
-///     // the executable's process outlives proxy objects created here.
-///     DynamicProxy::enable_usage();
-/// }
 /// jni_with_env(|env| {
 ///     let proxy = DynamicProxy::build(
 ///         env,
@@ -216,7 +208,6 @@ impl Drop for DynamicProxy {
 
 impl DynamicProxy {
     /// Creates a Java dynamic proxy with a new invocation handler backed by the Rust closure.
-    /// Please check [Self::enable_usage] for desktop platforms.
     ///
     /// A class loader is needed if the interface definition is loaded from embeded class/dex data;
     /// in such case, `interfaces` should not be strings. Otherwise they can be strings of Java
@@ -247,10 +238,7 @@ impl DynamicProxy {
             + Sync
             + 'static,
     {
-        #[cfg(not(target_os = "android"))]
-        if IS_PROXY_PERMITTED.get().is_none() {
-            return Err(Error::SecurityViolation);
-        }
+        crate::bindings::verify_bindings(env)?;
 
         let class_loader = match loader_context {
             LoaderContext::Loader(loader) => env.new_local_ref(loader)?,
@@ -282,37 +270,6 @@ impl DynamicProxy {
             rust_hdl_id: id,
             java_proxy: Some(proxy),
         })
-    }
-
-    /// (For desktop platforms only) Enables creation of dynamic proxies.
-    /// Before this is called, [Self::build] always returns an error.
-    ///
-    /// # Safety
-    ///
-    /// The native library using `jni-min-helper` should not be unloaded during
-    /// the lifetime of all dynamic proxy objects created here. If not sure,
-    /// please try to leak a JNI global reference of the class loader that has
-    /// loaded the native library, or calling [Self::disable_usage_permanently]
-    /// when unloading of the native library becomes possible.
-    ///
-    /// Please check <https://github.com/jni-rs/jni-rs/issues/833>.
-    #[cfg(not(target_os = "android"))]
-    pub unsafe fn enable_usage() {
-        let _ = IS_PROXY_PERMITTED.set(());
-    }
-
-    /// Call this if it is needed for the safety requirements of [Self::enable_usage].
-    /// After this call, future method calls to proxies created by this crate will
-    /// return `java.lang.UnsatisfiedLinkError`.
-    #[cfg(not(target_os = "android"))]
-    pub fn disable_usage_permanently() {
-        crate::jni_with_env(|env| {
-            use jni::refs::Reference;
-            use std::ops::Deref;
-            let cls = InvocHdl::lookup_class(env, &jni::refs::LoaderContext::None)?;
-            env.unregister_native_methods(cls.deref())
-        })
-        .unwrap()
     }
 
     /// Gets the invoked proxy ID inside the Rust handler closure for debugging;
@@ -350,10 +307,13 @@ fn rust_proxy_handler<'local>(
         args = JObjectArray::<JObject>::new(env, 0, JObject::null())?;
     }
     let lock = RUST_HANDLERS.lock().unwrap();
-    let rust_hdl = if let Some((invoc_id, f)) = (*lock).get(&id)
-        && *invoc_id == invoc_hdl_id
-    {
-        f.clone()
+    let rust_hdl = if let Some((invoc_id, f)) = (*lock).get(&id) {
+        if *invoc_id == invoc_hdl_id {
+            f.clone()
+        } else {
+            warn!("Unexpected: invocation handler mismatch detected in Proxy {id}.");
+            return Ok(JObject::null());
+        }
     } else {
         warn!("Proxy {id} is used, but the Rust handler has been dropped.");
         return Ok(JObject::null());

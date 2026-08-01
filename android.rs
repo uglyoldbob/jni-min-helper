@@ -5,126 +5,34 @@ use std::{
 };
 
 use jni::{
-    Env, bind_java_type,
+    Env,
     errors::Error,
     jni_sig, jni_str,
-    objects::{JClassLoader, JObject, JString},
+    objects::{JClassLoader, JObject, JString, JThread},
     refs::Global,
 };
 
 use crate::{
-    jni_with_env,
-    receiver::{AndroidBroadcastReceiver, Intent, IntentFilter},
+    bindings::{
+        AndroidBuildVersion, AndroidContext, AndroidLooper, DexFileClassLoader,
+        InMemoryDexClassLoader,
+    },
+    jni_get_vm, jni_with_env,
 };
 
 const DEX_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
-pub(crate) fn get_helper_class_loader() -> Result<&'static JClassLoader<'static>, Error> {
+pub(crate) fn get_helper_class_loader(
+    env: &mut Env,
+) -> Result<&'static JClassLoader<'static>, Error> {
     static CLASS_LOADER: OnceLock<Global<JClassLoader<'static>>> = OnceLock::new();
     if CLASS_LOADER.get().is_none() {
-        let loader = jni_with_env(|env| {
-            let dex_loader = get_android_context()
-                .get_class_loader(env)?
-                .load_dex(env, DEX_DATA)?;
-            env.new_global_ref(dex_loader)
-        })?;
-        let _ = CLASS_LOADER.set(loader);
+        let dex_loader = get_android_context(env)?
+            .get_class_loader(env)?
+            .load_dex(env, DEX_DATA)?;
+        let _ = CLASS_LOADER.set(env.new_global_ref(dex_loader)?);
     }
     Ok(CLASS_LOADER.get().unwrap())
-}
-
-bind_java_type! {
-    pub(crate) AndroidContext => "android.content.Context",
-    type_map = {
-        JFile => "java.io.File",
-        AndroidBroadcastReceiver => "android.content.BroadcastReceiver",
-        Intent => "android.content.Intent",
-        IntentFilter => "android.content.IntentFilter",
-    },
-    methods {
-        fn get_application_context() -> AndroidContext,
-        fn get_files_dir() -> JFile,
-        fn get_cache_dir() -> JFile,
-        fn get_code_cache_dir() -> JFile, // API level >= 21
-        fn get_dir(name: JString, mode: jint) -> JFile,
-        fn get_class_loader() -> JClassLoader,
-        fn get_package_name() -> JString,
-        fn register_receiver {
-            name = "registerReceiver",
-            sig = (receiver: AndroidBroadcastReceiver, filter: IntentFilter) -> Intent,
-        },
-        fn unregister_receiver(receiver: AndroidBroadcastReceiver),
-        fn check_self_permission(permission: JString) -> jint,
-        fn start_activity(intent: Intent) -> (),
-    }
-}
-
-// TODO: remove this when <https://github.com/jni-rs/jni-rs/issues/764> is resolved.
-bind_java_type! {
-    pub(crate) AndroidContextApi33 => "android.content.Context",
-    type_map = {
-        AndroidBroadcastReceiver => "android.content.BroadcastReceiver",
-        Intent => "android.content.Intent",
-        IntentFilter => "android.content.IntentFilter",
-    },
-    methods {
-        // NOTE: this is actually added in API level 26.
-        fn register_receiver {
-            name = "registerReceiver",
-            sig = (receiver: AndroidBroadcastReceiver, filter: IntentFilter, flags: jint) -> Intent,
-        },
-    }
-}
-impl<'a> AndroidContextApi33<'a> {
-    pub const RECEIVER_EXPORTED: i32 = 0x00000002;
-    pub const RECEIVER_NOT_EXPORTED: i32 = 0x00000004;
-}
-impl<'local> AndroidContext<'local> {
-    pub fn as_api_33<'env: 'local>(
-        &self,
-        env: &jni::Env<'env>,
-    ) -> jni::objects::Cast<'_, '_, AndroidContextApi33<'local>> {
-        // Safety: `AndroidContext` and `AndroidContextApi33` both map to `android.content.Context`.
-        unsafe { env.as_cast_unchecked::<AndroidContextApi33>(self) }
-    }
-}
-
-bind_java_type! {
-    pub(crate) JFile => "java.io.File",
-    methods {
-        fn get_absolute_path() -> JString,
-    }
-}
-
-bind_java_type! {
-    InMemoryDexClassLoader => "dalvik.system.InMemoryDexClassLoader",
-    constructors {
-        fn new(dex_buffer: JByteBuffer, parent: JClassLoader),
-    },
-    is_instance_of = {
-        JClassLoader,
-    }
-}
-
-bind_java_type! {
-    DexFileClassLoader => "dalvik.system.DexClassLoader",
-    constructors {
-        fn new(dex_path: JString, optimized_directory: JString, library_search_path: JString, parent: JClassLoader),
-    },
-    is_instance_of = {
-        JClassLoader,
-    }
-}
-
-bind_java_type! {
-    AndroidBuildVersion => "android.os.Build$VERSION",
-    fields {
-        #[allow(non_snake_case)]
-        static SDK_INT {
-            sig = jint,
-            get = SDK_INT,
-        },
-    },
 }
 
 /// Provides DEX class loading support for Android.
@@ -146,7 +54,7 @@ impl<'local> DexClassLoader<'local> for JClassLoader<'local> {
         env: &mut Env<'local>,
         dex_data: &'static [u8],
     ) -> Result<JClassLoader<'local>, Error> {
-        let context = get_android_context();
+        let context = get_android_context(env)?;
         if android_api_level() >= 26 {
             // Safety: dex_data is 'static and the `InMemoryDexClassLoader`` will not mutate it.
             // The data may be converted by `ConvertDexFilesToJavaArray()` and handled by the
@@ -200,42 +108,54 @@ impl<'local> DexClassLoader<'local> for JClassLoader<'local> {
 /// <https://github.com/rust-mobile/android-activity/issues/228> if you had expected a reference
 /// of an activity to be returned by this function.
 pub fn android_context() -> &'static JObject<'static> {
-    get_android_context().as_ref()
+    jni_with_env(get_android_context).unwrap()
 }
 
-pub(crate) fn get_android_context() -> &'static AndroidContext<'static> {
+pub(crate) fn get_android_context(
+    env: &mut Env,
+) -> Result<&'static AndroidContext<'static>, Error> {
     static ANDROID_CONTEXT: OnceLock<Global<AndroidContext<'static>>> = OnceLock::new();
-    let ctx = ANDROID_CONTEXT.get_or_init(|| {
-        jni_with_env(|env| {
-            let ctx_raw_global = ndk_context::android_context().context() as jni::sys::jobject;
-            if !ctx_raw_global.is_null() {
-                // Safety: the context pointer initialized in `ndk_context` should be a raw global
-                // reference of `android.content.Context`, which can be casted to `jni::sys::jobject`.
-                // `Env::as_cast_raw` does not create an owned `Global` that deletes the reference on drop.
-                let ctx = unsafe {
-                    env.as_cast_raw::<jni::refs::Global<AndroidContext<'static>>>(&ctx_raw_global)?
-                };
-                if let Ok(app) = ctx.get_application_context(env)
-                    && !app.is_null()
-                {
-                    env.new_global_ref(app)
-                } else {
-                    env.exception_clear();
-                    warn!("Cannot get the application context from the context pointed by `ndk_context`.");
-                    env.new_global_ref(ctx.as_ref())
-                }
-            } else {
-                get_app_from_activity_thread(env)
-            }
-        })
-        .unwrap()
+
+    if let Some(ctx) = ANDROID_CONTEXT.get() {
+        return Ok(ctx);
+    }
+
+    let ndk_context_available = do_and_forget_panic(|| {
+        let _ = ndk_context::android_context();
     });
-    ctx.as_ref()
+    let ctx_raw_global = if ndk_context_available {
+        ndk_context::android_context().context() as jni::sys::jobject
+    } else {
+        std::ptr::null_mut() as _
+    };
+
+    let ctx = if !ctx_raw_global.is_null() {
+        // Safety: the context pointer initialized in `ndk_context` should be a raw global
+        // reference of `android.content.Context`, which can be casted to `jni::sys::jobject`.
+        // `Env::as_cast_raw` does not create an owned `Global` that deletes the reference on drop.
+        let ctx = unsafe {
+            env.as_cast_raw::<jni::refs::Global<AndroidContext<'static>>>(&ctx_raw_global)?
+        };
+        match ctx.get_application_context(env) {
+            Ok(app) if !app.is_null() => env.new_global_ref(app),
+            _ => {
+                env.exception_clear();
+                warn!(
+                    "Cannot get the application context from the context pointed by `ndk_context`."
+                );
+                env.new_global_ref(ctx.as_ref())
+            }
+        }
+    } else {
+        get_app_from_activity_thread(env)
+    }?;
+    let _ = ANDROID_CONTEXT.set(ctx);
+
+    Ok(ANDROID_CONTEXT.get().unwrap())
 }
 
-fn get_app_from_activity_thread<'a>(
-    env: &mut Env<'a>,
-) -> Result<Global<AndroidContext<'static>>, Error> {
+fn get_app_from_activity_thread(env: &mut Env) -> Result<Global<AndroidContext<'static>>, Error> {
+    warn!("Doing the ActivityThread.getApplication() trick.");
     let th = env
         .call_static_method(
             jni_str!("android/app/ActivityThread"),
@@ -323,7 +243,12 @@ fn do_and_forget_panic(f: impl FnOnce() + std::panic::UnwindSafe) -> bool {
 /// Gets the API level (SDK version) of the current Android OS.
 pub fn android_api_level() -> i32 {
     static API_LEVEL: OnceLock<i32> = OnceLock::new();
-    *API_LEVEL.get_or_init(|| jni_with_env(|env| AndroidBuildVersion::SDK_INT(env)).unwrap())
+    *API_LEVEL.get_or_init(|| {
+        // Do not use `jni_with_env` which may do `verify_bindings` which hits here.
+        jni_get_vm()
+            .attach_current_thread(|env| AndroidBuildVersion::SDK_INT(env))
+            .unwrap()
+    })
 }
 
 /// Gets the raw name of the current Android application, parsed from the package name.
@@ -343,7 +268,7 @@ pub fn android_app_package_name() -> &'static str {
     static PACKAGE_NAME: OnceLock<String> = OnceLock::new();
     PACKAGE_NAME.get_or_init(|| {
         jni_with_env(|env| {
-            get_android_context()
+            get_android_context(env)?
                 .get_package_name(env)
                 .map(|s| s.to_string())
         })
@@ -357,7 +282,7 @@ pub fn android_app_files_dir() -> &'static Path {
     static FILES_DIR: OnceLock<PathBuf> = OnceLock::new();
     FILES_DIR.get_or_init(|| {
         jni_with_env(|env| {
-            get_android_context()
+            get_android_context(env)?
                 .get_files_dir(env)?
                 .get_absolute_path(env)
                 .map(|s| PathBuf::from_str(&s.to_string()).unwrap())
@@ -371,11 +296,30 @@ pub fn android_app_cache_dir() -> &'static Path {
     static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
     CACHE_DIR.get_or_init(|| {
         jni_with_env(|env| {
-            get_android_context()
+            get_android_context(env)?
                 .get_cache_dir(env)?
                 .get_absolute_path(env)
                 .map(|s| PathBuf::from_str(&s.to_string()).unwrap())
         })
         .unwrap()
     })
+}
+
+/// TODO: determine the naming of this function and make it public.
+pub(crate) fn is_current_thread_main_looper() -> Result<bool, Error> {
+    // Java thread ID should not change once the thread is created.
+    static MAIN_LOOPER_TID: OnceLock<jni::sys::jlong> = OnceLock::new();
+    if MAIN_LOOPER_TID.get().is_none() {
+        jni_with_env(|env| {
+            let main_looper = AndroidLooper::get_main_looper(env)?;
+            let main_thread = main_looper.get_thread(env)?;
+            let _ = MAIN_LOOPER_TID.set(main_thread.get_id(env)?);
+            Ok(())
+        })?;
+    }
+    let cur_id = jni_with_env(|env| {
+        let current_thread = JThread::current_thread(env)?;
+        current_thread.get_id(env)
+    })?;
+    Ok(cur_id == *MAIN_LOOPER_TID.get().unwrap())
 }
